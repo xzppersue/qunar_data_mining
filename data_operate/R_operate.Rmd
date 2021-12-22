@@ -1,0 +1,386 @@
+---
+title: "R_opetare"
+author: "zp"
+date: "2021/12/16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,fig.width=8, fig.height=6, warning=FALSE, message=FALSE)
+```
+
+## 数据导入
+```{r}
+rm(list=ls())
+set.seed(123)
+setwd("D:\\数据挖掘\\大作业\\data_operate")
+# data_all = read.csv("classification_all_14features.csv",encoding = "UTF-8")
+data_train = read.csv('class_train_new.csv',encoding = "gbk")
+data_test = read.csv('class_test_new.csv',encoding = "gbk")
+```
+
+## 预处理1
+```{r}
+rm(list=ls())
+set.seed(123)
+data = read.csv('classification_all_14features.csv',encoding = "UTF-8")
+X_num = data[c("per_cost","travel_days","photo_num",
+               "title_length")]
+X_num = scale(X_num,scale=TRUE)  # 标准化连续型变量
+data[c("per_cost","travel_days","photo_num",
+       "title_length")]=X_num
+
+class1=data[,"z"]
+class1[class1==0]="不受欢迎"
+class1[class1==1]="受欢迎"
+class=list()
+class$"受欢迎程度"<-class1
+library(epade)
+# 绘制条形图
+bar.plot.ade(class$受欢迎程度,form="z",
+         wall=1,prozent=TRUE,b=0.5,
+         xlab="类别",ylab="样本数",
+         main="欠采样后")
+
+data_pca=princomp(data[,-12])
+pca_cum_im=function(data_va){
+  # 计算主成分累积重要性
+  S=var(data_va)
+  E=eigen(S)
+  pca_importance=E$values/sum(E$values)
+  n0=length(pca_importance)
+  pca_cum_im=rep(0,n0)
+  for(i in 1:n0){
+    pca_cum_im[i]=sum(pca_importance[1:i])
+  }
+  return(pca_cum_im)
+}
+cum_im=pca_cum_im(data[,-12])
+plot(cum_im)
+
+pcScores=data_pca$scores[,1:5]
+data3=data.frame(pcScores)
+data3$z=data[,"z"]
+
+# 随机欠采样
+data0=data[data["z"]==0,]
+data1=data[data["z"]==1,]
+n0=dim(data0)[1]
+n1=dim(data1)[1]
+id1 = sample(x=1:n0,size=n1)
+data00=data0[id1,]
+data_new=rbind(data1,data00)
+data=data_new
+
+data_pca=princomp(data)
+pcScores=data_pca$scores[,1:5]
+data3=data.frame(pcScores)
+data3$z=data[,"z"]
+data=data3
+
+n=dim(data)[1]
+id = sample(x=1:n,size=round(n*0.2))  # 划分测试集的索引
+data_train=data[-id,]
+data_test = data[id,]
+```
+
+
+
+## 预处理2，采用原始数据主成分
+```{r}
+rm(list=ls())
+set.seed(123)
+setwd("D:\\数据挖掘\\大作业\\preprocessing")
+data = read.csv('classification_all_data.csv',encoding = "UTF-8")
+X_num = data[c("per_cost","travel_days","photo_num",
+               "title_length")]
+X_num = scale(X_num,scale=TRUE)  # 标准化连续型变量
+data[c("per_cost","travel_days","photo_num",
+       "title_length")]=X_num
+
+data_va=data[,-c(1,2,59)]
+S=var(data_va)
+E=eigen(S)
+pca_importance=E$values/sum(E$values)
+n0=length(pca_importance)
+pca_cum_im=rep(0,n0)
+for(i in 1:n0){
+  pca_cum_im[i]=sum(pca_importance[1:i])
+}
+plot(pca_cum_im,type='l',col='blue',
+     xlab="主成分个数",ylab="主成分累积重要性",
+     main="全变量主成分分析",
+     bg="lightgreen")
+
+
+pca_va=princomp(data_va)
+pcaScores=pca_va$scores
+summary(pca_va)
+data_new=pcaScores[,1:14]
+data_new = data.frame(data_new)
+data_new$z=data[,"z"]
+
+data0=data_new[data_new["z"]==0,]
+data1=data_new[data_new["z"]==1,]
+n0=dim(data0)[1]
+n1=dim(data1)[1]
+id1 = sample(x=1:n0,size=n1)
+data00=data0[id1,]
+data_new=rbind(data1,data00)
+
+n=dim(data_new)[1]
+id = sample(x=1:n,size=round(n*0.2))  # 划分测试集的索引
+data_train=data_new[-id,]
+data_test = data_new[id,]
+```
+
+## 决策树分类
+```{r}
+# 决策树分类
+library('rpart')
+library('rpart.plot')
+
+ctl <- rpart.control(minsplit=3,xval=10,maxdepth=2,cp=0)  
+# 自行设定修剪参数，复杂度参数CP初值为0，采用10折交叉验证
+tree_fit<-rpart(z~.,data=data_train,
+               method='class',control=ctl)  # 建立分类树
+# printcp(tree_fit)
+tree_pred<-predict(tree_fit,data_test,type = "class")  # 预测
+confM<-table(data_test$z,tree_pred)
+accuracy<-sum(diag(confM))/sum(confM)  
+accuracy
+```
+
+## 随机森林分类
+```{r,fig.width=12,fig.height=6}
+# 随机森林分类
+set.seed(123)
+library("randomForest")
+q=dim(data_train)[2]-1  # q个预测量和1个相应变量
+err_rate=rep(0,q)  # 设置模型误判率向量初始值
+for(i in 1:q){
+  rf_result <- randomForest(as.factor(data_train$z)~.,
+  data=data_train,mtry=i,ntree=1000)
+  err_rate[i] <- mean(rf_result$err.rate)   #计算基于OOB(袋外数据)的模型误判率均值
+   print(i)    
+}
+mean(err_rate) #展示所有模型误判率的均值
+max_features <- order(err_rate)[1];max_features
+#得到最佳的特征个数max_mfeatures
+plot(err_rate,pch=16,col="blue",
+     main="随机森林的OOB误判率与特征个数")  
+     # 绘制误判率与特征个数的散点图
+
+#选择最优的数的数目n_estimator：
+rf_train_n <- randomForest(as.factor(data_train$z)~.,
+data=data_train,mtry=max_features,ntree=1000)
+plot(rf_train_n,main="随机森林的OOB误判率与决策树棵数")
+     # 绘制模型误差与决策树数量关系图 
+
+# rf_train_n$err.rate OOB值
+n_estimator <- which(rf_train_n$err.rate[,1]==min(rf_train_n$err.rate[,1]));n_estimator
+
+n_estimator = n_estimator[1]  # 选择最少的棵数
+#随机森林训练
+set.seed(45)
+rf_fit<-randomForest(as.factor(data_train$z)~.,
+data=data_train,mtry=max_features,ntree=n_estimator,nodesize=20,importance=TRUE,proximity=TRUE) 
+rf_fit
+rf_pred<-predict(rf_fit,data_test,type = "class")  # 预测
+confM<-table(data_test$z,rf_pred)
+accuracy<-sum(diag(confM))/sum(confM)  
+```
+
+## KNN分类
+```{r}
+library("kknn")
+#knn训练
+data_train$z=as.factor(data_train$z)
+knn_fit <- kknn(as.factor(data_train$z)~.,
+                train=data_train,test=data_test
+                ,k=97,distance=2)
+table <- table(data_test$z,knn_fit$fitted.values)#混淆矩阵
+sum(diag(table))/sum(table)#准确率
+```
+## SVM分类
+```{r}
+library('e1071')
+set.seed(45)
+data_train$z=as.factor(data_train$z)
+C=c(0.01,0.1,1,5,10,100)  # 候选惩罚参数向量
+# 10折交叉验证选取最优惩罚参数
+svm_fit<-tune.svm(z~.,data=data_train,type='C-classification',cost=C,kernel="radial",gamma=0.1)  # 核函数为径向基核
+# summary(svm_fit)
+best_svm = svm_fit$best.model  # 最优回归SVM模型
+print(best_svm$cost)  # 最优模型的惩罚参数
+summary(best_svm)
+z_pred <- predict(best_svm,data_test)
+table <- table(data_test$z,z_pred)#混淆矩阵
+sum(diag(table))/sum(table)#在测试集上的准确率
+```
+
+
+## Xgboost分类
+```{r}
+library('xgboost')
+library('Matrix')
+set.seed(45)
+# 处理训练集数据格式
+train_x = Matrix(data.matrix(data_train[,-6])
+                 ,sparse=T)  # 将自变量转化为稀疏矩阵
+train_y = data_train[,"z"]
+# 转化响应变量
+train_xgb = list(data=train_x,label=train_y)  # 拼接为list
+d_train = xgb.DMatrix(data=train_x,
+                      label=train_y)
+# 构建模型需要的xgb.DMatrix对象
+
+# 处理测试集数据格式
+test_x = Matrix(data.matrix(data_test[,-6])
+                 ,sparse=T)  # 将自变量转化为稀疏矩阵
+test_y = data_test[,"z"]
+# 构建模型需要的xgb.DMatrix对象
+
+# XgBoost建模
+n_estimator = 30
+param = list(max_depth=3,eta=1,colsample_bytree=0.7) # 定义模型参数 
+xgb_fit = xgb.train(params=param,data=d_train,nrounds=n_estimator,objective = "binary:logistic")
+xgb_pred = round(predict(xgb_fit,test_x))
+
+#输出混淆矩阵
+table(test_y,xgb_pred,dnn=c("真实值","预测值"))
+mean(test_y==xgb_pred) 
+```
+
+## 神经网络分类
+```{r}
+# FNN 回归建模
+library(neuralnet)
+library(tictoc)
+set.seed(45)
+neurons=30
+learn_rate=0.1
+fnn_fit=neuralnet(z~.,data=data_train,threshold=1, 
+                  hidden=c(neurons,neurons),
+                  learningrate=learn_rate,
+                  act.fct="logistic",
+                  err.fct='ce',linear.output=FALSE)
+fnn_pred=round(predict(fnn_fit,data_test))
+table(data_test$z,fnn_pred,dnn=c("真实值","预测值"))
+mean(data_test$z==fnn_pred) 
+```
+
+```{r}
+# 调用keras(示例)
+library(keras)
+library(ggplot2)
+library(pheatmap)
+
+model <- keras_model_sequential()
+model %>%
+  layer_dense(units = 30,activation = "relu",input_shape = 13,name = "den1")%>%
+  layer_dense(units = 30,activation = "relu",name = "den2")%>%
+  layer_dense(units = 1,activation = "sigmoid")
+
+summary(model)
+
+## compile
+model%>%compile(
+  loss = "categorical_crossentropy",
+  optimizer = optimizer_adam(),
+  metrics = c("accuracy")
+)
+
+epochs=50
+batch_size=16
+train_x=data_train[,-12]
+train_y=data_train$z
+test_x=data_test[,-12]
+test_y=data_test$z
+##标准化前数据的训练结果
+mod_history <- model%>% fit(train_x,train_y,epochs = epochs,batch_size = batch_size,verbose = 0)
+
+## 可视化训练过程
+plot(mod_history)+
+  theme_bw()
+
+## 预测在测试集上的准确度
+model %>% evaluate(test_x,test_y)
+```
+
+## K-means聚类
+```{r}
+data_cla = as.matrix(data_train)
+
+k_means = function(k,data){
+  # data: 每行是一个样本
+  dd_xx = data%*%t(data)
+  diagonal = diag(dd_xx)
+  
+  n = dim(data)[1]
+  # 产生初始类质心
+  v = data[1:k,]
+  C = rep(0,n)
+  C1 = C+1
+  
+  if(k==1){
+    C=rep(1,n)
+    return(C)
+  }
+  
+  while(!identical(C,C1)){
+    C = C1
+    
+    dd_xv=data%*%t(v)
+    dd_vv=t(matrix(diag(v%*%t(v)),nrow=k,ncol=n))
+    dd=matrix(diagonal,nrow=n,ncol=k)-2*dd_xv+dd_vv
+    C1 = apply(dd,1,which.min)
+    
+    for (j in 1:k) {
+      id_data = data[C1==j,]
+      if(is.numeric(nrow(id_data))){
+        v[j,] = colMeans(id_data)
+      }else{
+        v[j,] = id_data
+      }
+    }
+  }
+  return(C)  # 返回聚类C：向量，存储各索引对应的样本的类
+}
+
+# 绘制组内平方和关于K的scree图
+distance=function(x,y){  # 欧式距离
+  return(sqrt(sum((x-y)^2)))
+}
+
+compute_WGSS = function(clusters, data){
+  k=length(clusters)
+  sum=0
+  for (i in 1:k) {
+    cluster_data = data[clusters==i,]
+    if(is.numeric(nrow(cluster_data))){
+      cluster_mean = colMeans(cluster_data)
+      sum = sum + sum((apply(cluster_data,1,distance,
+                           cluster_mean))^2)
+    }
+  }
+  return(sum)
+}
+
+k_values = 1:14
+WGSS = k_values
+for (i in k_values) {
+  WGSS[i]=compute_WGSS(k_means(i,data_cla),data_cla)
+}
+plot(k_values,WGSS,type='b',xlab='聚类数k',
+     ylab='组内平方和')
+
+```
+
+
+## EM聚类
+```{r}
+library(mclust)
+em_cluster = Mclust(data=data_train)
+summary(em_cluster)
+```
