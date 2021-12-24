@@ -1,0 +1,218 @@
+---
+documentclass: ctexart
+title: "Regression_R"
+output: rticles::ctex
+---
+---
+output: pdf_document
+geometry: "left=3cm,right=3cm,top=3cm,bottom=2cm"
+---
+\pagestyle{plain}
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,fig.width=8, fig.height=6, warning=FALSE, message=FALSE)
+```
+
+```{r}
+#导数据
+rm(list=ls())
+library(readr)
+data <- read_csv("E:/master_SJTU/202109/Data_mining/regression.csv")
+#训练集
+reg_train <- read_csv("E:/master_SJTU/202109/Data_mining/reg_train.csv")
+#测试集
+reg_test<- read_csv("E:/master_SJTU/202109/Data_mining/reg_test.csv")
+n=dim(data)[1]
+q=dim(data)[2]-1
+```
+
+## Lasso, Ridge regression, Elastic net
+
+为了解决线性回归出现的过拟合以及在通过正规方程方法求解θ的过程中出现的$X^\mathrm{T}X$不可逆，可在损失函数中引入正则化项来达到目的。为了防止过拟合(θ过大)，在目标函数$J(\theta)$后添加复杂度惩罚因子，即正则项来防止过拟合。正则项可以使用$L_1$-norm(Lasso)、$L_2$-norm(Ridge)，或结合$L_1$-norm、$L_2$-norm(Elastic Net)。
+
+### Lasso
+本节使用Lasso进行回归建模。回归复杂度调整的程度由参数$\lambda$来控制,$\lambda$越大对变量较多的线性模型的惩罚力度就越大，从而最终获得一个变量较少的模型。另一个参数$\alpha$控制应对高相关性数据时模型的性状。LASSO 回归时，$\alpha=1$。在实验中，先采取交叉验证在训练集中选出最优参数$\lambda$，建立模型，计算测试集的均方误差。
+ 
+```{r}
+X_train = as.matrix(reg_train[,-(q+1)])
+X_test = as.matrix(reg_test[,-(q+1)])
+y_train = as.matrix(reg_train[,q+1])
+y_test = as.matrix(reg_test[,q+1])
+
+library(glmnet)
+#默认十折交叉验证选取最优参数
+alpha2.fit <- cv.glmnet(X_train, y_train,lambda = seq(0,1,0.01),type.measure="mse", alpha=1, family="gaussian")
+plot(alpha2.fit)
+```
+```{r}
+bestlam = alpha2.fit$lambda.min
+bestlam
+```
+
+```{r}
+#代入最优参数建模
+bestlasso = glmnet(as.matrix(X_train), y_train, alpha = 1, lambda = bestlam)
+bestlasso.pred = predict(bestlasso,as.matrix(X_test))
+#求出MSE
+lasso_mse=mean((bestlasso.pred-y_test)^2)
+cat('The MSE of Lasso is',lasso_mse)
+```
+```{r}
+# 计算绝对误差小于0.5的预测比率 
+lasso_diff = abs(y_test-bestlasso.pred)
+lasso_ratio = sum(lasso_diff>0.5)/length(lasso_diff)
+```
+
+
+### Ridge regression
+本节使用Ridge regression进行回归建模。与Lasso处理方式类似，先求出最优参数$\lambda$，再建模拟合，此时$\alpha=0$。
+
+```{r}
+alpha1.fit <- cv.glmnet(as.matrix(X_train), y_train, lambda = seq(0,20,0.01),type.measure="mse", alpha=0, family="gaussian")
+plot(alpha1.fit)
+```
+```{r}
+bestlam = alpha1.fit$lambda.min
+bestlam
+```
+```{r}
+#代入最优参数建模
+bestridge = glmnet(X_train, y_train, alpha = 0, lambda = bestlam)
+bestridge.pred = predict(bestridge,as.matrix(X_test))
+#求出MSE
+ridge_mse=mean((bestridge.pred-y_test)^2)
+cat('The MSE of Ridge regression is',ridge_mse)
+```
+```{r}
+# 计算绝对误差小于0.5的预测比率 
+ridge_diff = abs(y_test-bestridge.pred)
+ridge_ratio = sum(ridge_diff >0.5)/length(ridge_diff )
+```
+
+
+### Elastic net
+本节使用Elastic net进行回归建模。
+
+```{r}
+list.of.fits <- list()
+for (i in 0:20) {
+  fit.name <- paste0("alpha", i/20)
+  list.of.fits[[fit.name]] <-
+    cv.glmnet(X_train, y_train,lambda = seq(0,1,0.01), type.measure="mse", alpha=i/20, 
+      family="gaussian")
+}
+results <- data.frame()
+for (i in 0:20) {
+  fit.name <- paste0("alpha", i/20)
+  predicted <- 
+    predict(list.of.fits[[fit.name]], 
+      s=list.of.fits[[fit.name]]$lambda.min, newx=X_test)
+  
+  #计算MSE
+  mse <- mean((y_test- predicted)^2)
+  #存储结果
+  temp <- data.frame(alpha=i/20, mse=mse, fit.name=fit.name)
+  results <- rbind(results, temp)
+}
+
+results
+```
+```{r}
+plot(results$alpha,results$mse,xlab = "Alpha",ylab = "MSE")
+```
+```{r}
+results[which.min(results$mse),]
+```
+```{r}
+bestElastic = glmnet(X_train, y_train, alpha = 1, lambda =list.of.fits$alpha1$lambda.min )
+bestElastic.pred = predict( bestElastic,X_test)
+#求出MSE
+Elastic_mse=mean((bestElastic.pred-y_test)^2)
+cat('The MSE of Elastic Net is',Elastic_mse)
+```
+```{r}
+# 计算绝对误差小于0.5的预测比率 
+elastic_diff = abs(y_test-bestElastic.pred)
+elastic_ratio = sum(elastic_diff>0.5)/length(elastic_diff)
+```
+
+
+## PCR
+本节使用PCR进行回归建模。使用80\%的数据作为训练数据建立主成分回归模型，再使用20\%的数据作为测试数据进行检验。
+```{r}
+attach(data.frame(X_train))
+```
+
+```{r}
+library(pls)
+pcr.fit<-pcr(y~.,data=reg_train,validation="CV")
+summary(pcr.fit)
+```
+```{r}
+validationplot(pcr.fit,val.type = "MSEP")
+```
+取前三个主成分
+
+```{r}
+pcr_test_fit<-pcr(y~.,data=reg_train)
+pcr.pred<-predict(pcr_test_fit,X_test,ncomp=3)
+pcr_mse=mean((pcr.pred-as.vector(y_test))^2)
+cat('The MSE of PCR is',pcr_mse)
+```
+```{r}
+pcr_diff = abs(as.vector(y_test)-pcr.pred)
+pcr_ratio = sum(pcr_diff>0.5)/length(pcr_diff)
+```
+
+
+## PLS
+本节使用PLS进行回归建模。
+```{r}
+library(pls)
+pls.fit <- plsr(y~., data = data.frame(reg_train), validation = "CV")
+summary(pls.fit)
+```
+```{r}
+validationplot(pls.fit,val.type='MSEP',legend='topleft')
+```
+
+取前一个主成分
+```{r}
+pls.pred<-predict(pls.fit,X_test,ncomp = 1)
+pls_mse=mean((pls.pred-as.vector(y_test))^2)
+cat('The MSE of PLS is',pls_mse)
+summary(pls.fit)
+```
+```{r}
+pls_diff = abs(as.vector(y_test)-pls.pred)
+pls_ratio = sum(pls_diff>0.5)/length(pls_diff)
+```
+
+
+
+## Compare different models
+本节比较Lasso, Ridge, Elastic Net, PCR, PLS 在测试集上的表现，绘制它们的MSE箱线图和预测绝对误差大于0.5的占比条形图。
+
+```{r,fig.width=12,fig.height=6}
+library(vioplot)
+models = c('Lasso','Ridge regression','Elastic Net', 'PCR', 'PLS')
+models = as.factor(models)
+mse_all = cbind(lasso_diff,ridge_diff,elastic_diff,pcr_diff,pls_diff)
+mse_frame = data.frame(data=mse_all)
+mse_frame=`colnames<-`(mse_frame,models)  # 重命名列名
+ratio_all=cbind(lasso_ratio,ridge_ratio,elastic_ratio, pcr_ratio,pls_ratio)
+par(mfrow=c(1,2),cex=0.7,cex.main=1,font.main=1)
+# palette = RColorBrewer::brewer.pal(6,'Set1')  
+# 设置离散型调色板
+vioplot(mse_all,names=models,xlab="模型",ylab="离差")
+barplot(ratio_all,names=models,density=40,
+        main='ratio barplot of absolute error more than 
+        0.5 on test data',xlab='models',ylab='ratio')
+```
+
+可以看到，Lasso算法在预测阅读数响应变量上的表现最好。
+
+
+
+
+
